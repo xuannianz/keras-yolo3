@@ -9,7 +9,7 @@ from keras.models import Model
 from keras.optimizers import Adam
 from keras.callbacks import TensorBoard, ModelCheckpoint, ReduceLROnPlateau, EarlyStopping
 
-from yolo3.model import preprocess_true_boxes, yolo_body, tiny_yolo_body, yolo_loss
+from yolo3.model import preprocess_gt_boxes, yolo_body, tiny_yolo_body, yolo_loss
 from yolo3.utils import get_random_data
 
 
@@ -191,7 +191,7 @@ def data_generator(annotation_lines, batch_size, input_shape, anchors, num_class
         if verbose:
             print("Progress: ",i,"/",n)
         box_data = np.array(box_data)
-        y_true = preprocess_true_boxes(box_data, input_shape, anchors, num_classes)
+        y_true = preprocess_gt_boxes(box_data, input_shape, anchors, num_classes)
         yield [image_data, *y_true], np.zeros(batch_size)
 
 def data_generator_wrapper(annotation_lines, batch_size, input_shape, anchors, num_classes, random=True, verbose=False):
@@ -215,7 +215,7 @@ def bottleneck_generator(annotation_lines, batch_size, input_shape, anchors, num
             b2[b]=bottlenecks[2][i]
             i = (i+1) % n
         box_data = np.array(box_data)
-        y_true = preprocess_true_boxes(box_data, input_shape, anchors, num_classes)
+        y_true = preprocess_gt_boxes(box_data, input_shape, anchors, num_classes)
         yield [b0, b1, b2, *y_true], np.zeros(batch_size)
 
 if __name__ == '__main__':
