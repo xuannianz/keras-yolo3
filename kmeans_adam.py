@@ -2,9 +2,10 @@ import numpy as np
 
 
 class YOLOKmeans:
-    def __init__(self, cluster_number, annotation_paths):
+    def __init__(self, cluster_number, annotation_paths, anchors_path):
         self.cluster_number = cluster_number
         self.annotation_paths = annotation_paths
+        self.anchors_path = anchors_path
 
     def iou(self, boxes, clusters):
         """
@@ -70,7 +71,7 @@ class YOLOKmeans:
         return clusters
 
     def result2txt(self, data):
-        f = open("yolo_anchors_adam.txt", 'w')
+        f = open(self.anchors_path, 'w')
         row = np.shape(data)[0]
         for i in range(row):
             if i == 0:
@@ -116,7 +117,9 @@ class YOLOKmeans:
 
 if __name__ == "__main__":
     num_clusters = 9
-    annotation_paths = ["/home/adam/.keras/datasets/udacity_self_driving_car/object-detection-crowdai/train_yolo.csv",
-                        "/home/adam/.keras/datasets/udacity_self_driving_car/object-detection-crowdai/val_yolo.csv"]
-    kmeans = YOLOKmeans(num_clusters, annotation_paths)
+    # annotation_paths = ["/home/adam/.keras/datasets/udacity_self_driving_car/object-detection-crowdai/train_yolo.csv",
+    #                     "/home/adam/.keras/datasets/udacity_self_driving_car/object-detection-crowdai/val_yolo.csv"]
+    annotation_paths = ["/home/adam/.keras/datasets/VOCdevkit/trainval/train.txt",
+                        "/home/adam/.keras/datasets/VOCdevkit/test/test.txt"]
+    kmeans = YOLOKmeans(num_clusters, annotation_paths, 'yolo_anchors_voc.txt')
     kmeans.txt2clusters()

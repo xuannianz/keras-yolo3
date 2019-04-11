@@ -17,6 +17,7 @@ from yolo3.model import yolo_eval, yolo_body, tiny_yolo_body
 from yolo3.utils import resize_image
 import os
 from keras.utils import multi_gpu_model
+import tensorflow as tf
 
 
 class YOLO(object):
@@ -39,7 +40,7 @@ class YOLO(object):
         self.class_names = self._get_class()
         self.anchors = self._get_anchors()
         self.sess = K.get_session()
-        self.image_shape = K.placeholder(shape=(2,))
+        self.image_shape = K.placeholder(shape=(None, 2))
         self.boxes, self.scores, self.classes = self.generate()
 
     def _get_class(self):
@@ -92,9 +93,12 @@ class YOLO(object):
         # Generate output tensor targets for filtered bounding boxes.
         if self.gpu_num >= 2:
             self.yolo_model = multi_gpu_model(self.yolo_model, gpus=self.gpu_num)
-        boxes, scores, classes = yolo_eval(self.yolo_model.output, self.anchors,
-                                           num_classes, self.image_shape,
-                                           score_threshold=self.score, iou_threshold=self.iou)
+        boxes, scores, classes = yolo_eval(self.yolo_model.output,
+                                           self.anchors,
+                                           num_classes,
+                                           self.image_shape,
+                                           score_threshold=self.score,
+                                           iou_threshold=self.iou)
         return boxes, scores, classes
 
     def detect_image(self, image):

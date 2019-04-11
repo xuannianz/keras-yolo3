@@ -215,17 +215,23 @@ def yolo_boxes_and_scores(feats, anchors, num_classes, input_shape, image_shape)
         feats:
         anchors: (num_anchors_this_layer, 2)
         num_classes:
-        input_shape:
-        image_shape:
+        input_shape: (2, ) hw
+        image_shape: (batch_size, 2)
 
     Returns:
 
     """
     box_xy, box_wh, box_confidence, box_class_probs = yolo_head(feats, anchors, num_classes, input_shape)
-    boxes = yolo_correct_boxes(box_xy, box_wh, input_shape, image_shape)
-    boxes = K.reshape(boxes, [-1, 4])
+    # adam for batch predictions
+    batch_size = K.shape(image_shape)[0]
+    input_shape = K.expand_dims(input_shape, axis=0)
+    input_shape = K.tile(input_shape, (batch_size, 1))
+    elems = (box_xy, box_wh, input_shape, image_shape)
+    boxes = tf.map_fn(lambda x: yolo_correct_boxes(x[0], x[1], x[2], x[3]), elems=elems, dtype=tf.float32)
     box_scores = box_confidence * box_class_probs
-    box_scores = K.reshape(box_scores, [-1, num_classes])
+    batch_size = tf.shape(feats)[0]
+    boxes = tf.reshape(boxes, [batch_size, -1, 4])
+    box_scores = tf.reshape(box_scores, [batch_size, -1, num_classes])
     return boxes, box_scores
 
 
@@ -235,7 +241,9 @@ def yolo_eval(yolo_outputs,
               image_shape,
               max_boxes=20,
               score_threshold=.6,
-              iou_threshold=.5):
+              iou_threshold=.5,
+              max_boxes_per_image=200,
+              ):
     """
     Evaluate yolo model on given input and return filtered boxes.
 
@@ -244,9 +252,10 @@ def yolo_eval(yolo_outputs,
         anchors (np.array): anchor 文件中的所有 anchors
         num_classes (int):
         image_shape (tensor): (2, ) (image_height, image_width)
-        max_boxes:
+        max_boxes: 一个 image 上属于某个 class 的最大的 boxes 个数
         score_threshold:
         iou_threshold:
+        max_boxes_per_image: 一个 image 上最大 boxes 个数
 
     Returns:
 
@@ -255,38 +264,89 @@ def yolo_eval(yolo_outputs,
     anchor_mask = [[6, 7, 8], [3, 4, 5], [0, 1, 2]] if num_output_layers == 3 else [[3, 4, 5], [1, 2, 3]]
     # tensor, (2, )
     input_shape = K.shape(yolo_outputs[0])[1:3] * 32
-    boxes = []
-    box_scores = []
+    # 每一个元素是一个 tensor (batch_size, num_boxes_this_layer, 4), 表示某一输出层上所有的 boxes
+    boxes_per_output_layer = []
+    scores_per_output_layer = []
     for l in range(num_output_layers):
-        _boxes, _box_scores = yolo_boxes_and_scores(yolo_outputs[l], anchors[anchor_mask[l]], num_classes, input_shape,
-                                                    image_shape)
-        boxes.append(_boxes)
-        box_scores.append(_box_scores)
-    boxes = K.concatenate(boxes, axis=0)
-    box_scores = K.concatenate(box_scores, axis=0)
+        output_layer_boxes, output_layer_scores = yolo_boxes_and_scores(yolo_outputs[l],
+                                                                        anchors[anchor_mask[l]],
+                                                                        num_classes,
+                                                                        input_shape,
+                                                                        image_shape,
+                                                                        )
+        boxes_per_output_layer.append(output_layer_boxes)
+        scores_per_output_layer.append(output_layer_scores)
 
-    mask = box_scores >= score_threshold
+    # adam for batch inference, axis=0 表示的是 batch 那一维, axis=1 表示的是 boxes_per_layer 那一维
+    boxes = K.concatenate(boxes_per_output_layer, axis=1)
+    scores = K.concatenate(scores_per_output_layer, axis=1)
+
+    mask = scores >= score_threshold
     max_boxes_tensor = K.constant(max_boxes, dtype='int32')
-    boxes_ = []
-    scores_ = []
-    classes_ = []
-    for c in range(num_classes):
-        # TODO: use keras backend instead of tf.
-        class_boxes = tf.boolean_mask(boxes, mask[:, c])
-        class_box_scores = tf.boolean_mask(box_scores[:, c], mask[:, c])
-        nms_index = tf.image.non_max_suppression(
-            class_boxes, class_box_scores, max_boxes_tensor, iou_threshold=iou_threshold)
-        class_boxes = K.gather(class_boxes, nms_index)
-        class_box_scores = K.gather(class_box_scores, nms_index)
-        classes = K.ones_like(class_box_scores, 'int32') * c
-        boxes_.append(class_boxes)
-        scores_.append(class_box_scores)
-        classes_.append(classes)
-    boxes_ = K.concatenate(boxes_, axis=0)
-    scores_ = K.concatenate(scores_, axis=0)
-    classes_ = K.concatenate(classes_, axis=0)
+    max_boxes_per_image_tensor = K.constant(max_boxes_per_image, dtype='int32')
 
-    return boxes_, scores_, classes_
+    # 每一个元素是一个 tensor 表示一个 batch_item 的预测值
+    # 用 list 而不是 tensor 来存储是因为每一个 batch_item 预测到的 boxes 的数量经过过滤后会不一样
+    boxes_list = []
+    scores_list = []
+    class_ids_list = []
+    # 返回一个 list, 每一个元素表示一个 batch_item 上未过滤的 boxes
+
+    # def loop_body(x, i_, batch_boxes_):
+    #     batch_item_boxes_ = tf.gather(x, i)
+    #     batch_boxes_ = tf.concat([batch_boxes_, [batch_item_boxes_]], 0)
+    #     return x, i_ + 1, batch_boxes_
+    # batch_boxes = tf.Variable([])
+    # i = tf.constant(0)
+    # _, _, batch_boxes = tf.while_loop(lambda x, i_, _: i_ < batch_size,
+    #                                   loop_body,
+    #                                   (boxes, 0, batch_boxes),
+    #                                   shape_invariants=(boxes.get_shape(), i.get_shape(), tf.TensorShape(None)))
+    # batch_boxes = tf.unstack(boxes)
+    # partitioned = tf.dynamic_partition(boxes, tf.range(batch_size), batch_size, name='dynamic_unstack')
+    # batch_scores = tf.unstack(scores)
+    # batch_mask = tf.unstack(mask)
+    def evaluate_batch_item(batch_item_boxes, batch_item_scores, batch_item_mask):
+        # 每一个元素表示一个 batch_item 上属于某一个类的 boxes
+        boxes_per_class = []
+        scores_per_class = []
+        class_ids_per_class = []
+        for c in range(num_classes):
+            # TODO: use keras backend instead of tf.
+            class_boxes = tf.boolean_mask(batch_item_boxes, batch_item_mask[:, c])
+            class_scores = tf.boolean_mask(batch_item_scores[:, c], batch_item_mask[:, c])
+            nms_index = tf.image.non_max_suppression(class_boxes,
+                                                     class_scores,
+                                                     max_boxes_tensor,
+                                                     iou_threshold=iou_threshold)
+            class_boxes = K.gather(class_boxes, nms_index)
+            class_scores = K.gather(class_scores, nms_index)
+            class_class_ids = K.ones_like(class_scores, 'float32') * c
+            boxes_per_class.append(class_boxes)
+            scores_per_class.append(class_scores)
+            class_ids_per_class.append(class_class_ids)
+        filtered_batch_item_boxes = K.concatenate(boxes_per_class, axis=0)
+        filtered_batch_item_scores = K.concatenate(scores_per_class, axis=0)
+        filtered_batch_item_scores = K.expand_dims(filtered_batch_item_scores, axis=-1)
+        filtered_batch_item_class_ids = K.concatenate(class_ids_per_class, axis=0)
+        filtered_batch_item_class_ids = K.expand_dims(filtered_batch_item_class_ids, axis=-1)
+        filtered_batch_item_predictions = K.concatenate([filtered_batch_item_boxes,
+                                                         filtered_batch_item_scores,
+                                                         filtered_batch_item_class_ids], axis=-1)
+        batch_item_num_predictions = tf.shape(filtered_batch_item_boxes)[0]
+        padded_batch_item_predictions = tf.pad(tensor=filtered_batch_item_predictions,
+                                               paddings=[[0, max_boxes_per_image_tensor - batch_item_num_predictions],
+                                                         [0, 0]],
+                                               mode='CONSTANT',
+                                               constant_values=0.0)
+        return padded_batch_item_predictions
+
+    predictions = tf.map_fn(lambda x: evaluate_batch_item(x[0], x[1], x[2]),
+                            elems=(boxes, scores, mask),
+                            dtype=tf.float32)
+
+    return predictions[..., :4], predictions[..., 4], predictions[..., 5]
+    # return boxes_list, scores_list, class_ids_list
 
 
 def preprocess_gt_boxes(gt_boxes, input_shape, anchors, num_classes):
