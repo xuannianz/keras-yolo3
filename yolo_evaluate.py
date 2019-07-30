@@ -13,7 +13,7 @@ import h5py
 import sys
 import pickle
 
-os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 
 
 def intersection_area(boxes1, boxes2, mode='outer_product', border_pixels='half'):
@@ -323,15 +323,17 @@ def get_hdf5_data(hdf5_dataset_path,
     label_shapes_dataset = hdf5_dataset['label_shapes']
     image_ids = []
     image_ids_dataset = hdf5_dataset['image_ids']
+    image_shapes = []
+    image_shapes_dataset = hdf5_dataset['image_shapes']
     dataset_size = len(labels_dataset)
     if verbose:
-        tr = trange(dataset_size, desc='Loading labels', file=sys.stdout)
+        tr = trange(dataset_size, desc='Loading data', file=sys.stdout)
     else:
         tr = range(dataset_size)
     for i in tr:
         labels.append(labels_dataset[i].reshape(label_shapes_dataset[i]))
         image_ids.append(image_ids_dataset[i])
-
+        image_shapes.append(image_shapes_dataset[i])
     # 用于表示每个 class 有多少个 gt_boxes, 一个元素表示 background
     num_gt_per_class = np.zeros(shape=num_classes + 1, dtype=np.int)
 
@@ -354,7 +356,7 @@ def get_hdf5_data(hdf5_dataset_path,
         print('num_gt_per_class={}'.format(num_gt_per_class))
 
     if ret:
-        return dataset_size, labels, image_ids, num_gt_per_class
+        return dataset_size, labels, image_ids, num_gt_per_class, image_shapes
 
 
 def match_predictions(predictions_per_class,
@@ -773,8 +775,8 @@ if __name__ == '__main__':
     val_hdf5_path = osp.join(DATASET_DIR, '07_test.h5')
     model_input_size_ = (416, 416)
     image_paths_ = glob.glob('/home/adam/.keras/datasets/VOCdevkit/test/VOC2007/JPEGImages/*.jpg')
-    yolo_ = YOLO(model_path='logs/2019-04-09/052-20.628-22.252.h5',
-                 anchors_path='model_data/voc_anchors.txt',
+    yolo_ = YOLO(model_path='logs/2019-04-15/018-21.541-22.108.h5',
+                 anchors_path='model_data/resized_voc_anchors.txt',
                  classes_path='model_data/voc_classes.txt',
                  model_image_size=model_input_size_,
                  )
@@ -788,7 +790,9 @@ if __name__ == '__main__':
                                                            num_classes=20,
                                                            )
         pickle.dump(predictions_per_class_, open(predictions_pickle_path, 'wb'))
-    dataset_size_, labels_, image_ids_, num_gt_per_class_ = get_hdf5_data(val_hdf5_path, num_classes=20, verbose=True)
+    dataset_size_, labels_, image_ids_, num_gt_per_class_, *_ = get_hdf5_data(val_hdf5_path,
+                                                                              num_classes=20,
+                                                                              verbose=True)
     _, _, cumulative_true_positives_, cumulative_false_positives_ = match_predictions(predictions_per_class_,
                                                                                       dataset_size_,
                                                                                       labels_,

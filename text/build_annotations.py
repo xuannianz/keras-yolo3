@@ -256,7 +256,7 @@ def split_contour(contour, offset_x, resized_width, offset_y, resized_height):
     max_x = max_x - ((max_x - min_x) % 16)
     this_min_y = min_y
     this_max_y = max_y
-    for x in range(min_x + 16, max_x, 16):
+    for x in range(min_x, max_x, 16):
         area = blackboard[:, x:x + 16]
         while not np.any(area[this_min_y]):
             this_min_y += 1
@@ -328,6 +328,7 @@ def show_origin_annotation(image_path, image_annotations):
         contours.append(np.array(annotation['points']))
     cv2.drawContours(image, contours, -1, (0, 255, 0), 1)
     show_image(image)
+
 
 if __name__ == '__main__':
     import os.path as osp
