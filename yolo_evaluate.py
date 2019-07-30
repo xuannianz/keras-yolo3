@@ -1,6 +1,6 @@
 from yolo import YOLO
 from timeit import default_timer as timer
-from yolo3.utils import resize_image
+from yolo3.utils import resize_image, resize_image_2
 from PIL import Image
 import numpy as np
 import keras.backend as K
@@ -13,7 +13,7 @@ import h5py
 import sys
 import pickle
 
-os.environ['CUDA_VISIBLE_DEVICES'] = '1'
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
 
 def intersection_area(boxes1, boxes2, mode='outer_product', border_pixels='half'):
@@ -258,6 +258,7 @@ def get_predictions_per_class(yolo,
         else:
             batch_image_paths = image_paths[i:i + batch_size]
         batch_images_data = []
+        batch_image_shapes = []
         for image_path in batch_image_paths:
             image = Image.open(image_path)
             boxed_image = resize_image(image, model_input_size)
@@ -266,12 +267,15 @@ def get_predictions_per_class(yolo,
             # print(image_data.shape)
             image_data /= 255.
             batch_images_data.append(image_data)
+            batch_image_shapes.append((image.size[1], image.size[0]))
         batch_images_data = np.array(batch_images_data)
+        batch_image_shapes = np.array(batch_image_shapes)
         batch_pred_boxes, batch_pred_scores, batch_pred_classes = yolo.sess.run(
             [yolo.boxes, yolo.scores, yolo.classes],
             feed_dict={
                 yolo.yolo_model.input: batch_images_data,
-                yolo.image_shape: np.stack([[416, 416]] * len(batch_image_paths)),
+                # yolo.image_shape: np.stack([[416, 416]] * len(batch_image_paths)),
+                yolo.image_shape: batch_image_shapes,
                 K.learning_phase(): 0
             })
         for j, batch_item_pred_boxes in enumerate(batch_pred_boxes):
@@ -283,16 +287,21 @@ def get_predictions_per_class(yolo,
             batch_item_pred_scores = batch_item_pred_scores[batch_item_pred_scores > 0.0]
             image_id = osp.split(batch_image_paths[j])[-1][:-4]
             # print('Found {} boxes for image {}'.format(len(pred_boxes), image_id))
+            image = cv2.imread(batch_image_paths[j])
             for k, pred_box in enumerate(batch_item_pred_boxes):
                 class_id = int(batch_item_pred_classes[k])
                 score = batch_item_pred_scores[k]
-                ymin = int(round(pred_box[0]))
-                xmin = int(round(pred_box[1]))
-                ymax = int(round(pred_box[2]))
-                xmax = int(round(pred_box[3]))
+                ymin = max(int(round(pred_box[0])), 0)
+                xmin = max(int(round(pred_box[1])), 0)
+                ymax = min(int(round(pred_box[2])), batch_image_shapes[j][0])
+                xmax = min(int(round(pred_box[3])), batch_image_shapes[j][1])
                 prediction = (image_id, score, xmin, ymin, xmax, ymax)
                 # 第 0 个元素表示 background
                 predictions_per_class[int(class_id) + 1].append(prediction)
+                cv2.rectangle(image, (xmin, ymin), (xmax, ymax), (0, 255, 0), 2)
+            cv2.namedWindow('image', cv2.WINDOW_NORMAL)
+            cv2.imshow('image', image)
+            cv2.waitKey(0)
     return predictions_per_class
 
 
@@ -775,7 +784,7 @@ if __name__ == '__main__':
     val_hdf5_path = osp.join(DATASET_DIR, '07_test.h5')
     model_input_size_ = (416, 416)
     image_paths_ = glob.glob('/home/adam/.keras/datasets/VOCdevkit/test/VOC2007/JPEGImages/*.jpg')
-    yolo_ = YOLO(model_path='logs/2019-04-15/018-21.541-22.108.h5',
+    yolo_ = YOLO(model_path='logs/2019-04-09/052-20.628-22.252.h5',
                  anchors_path='model_data/resized_voc_anchors.txt',
                  classes_path='model_data/voc_classes.txt',
                  model_image_size=model_input_size_,
